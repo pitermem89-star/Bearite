@@ -73,7 +73,18 @@ class MiniGames(private val act: Activity) {
     private val isHost: Boolean get() = players.isEmpty() || me == null || me!!.actor == players.minOf { it.actor }
     private fun nick(a: Int) = players.firstOrNull { it.actor == a }?.nick?.ifBlank { "игрок $a" } ?: "игрок $a"
 
-    init { main.post(object : Runnable { override fun run() { tick(); main.postDelayed(this, 250) } }) }
+    init {
+        // Photon Cloud: AppId по умолчанию (можно поменять в поле на вкладке «Мультиплеер»)
+        try {
+            if (!File(dir, "_appid").exists()) { dir.mkdirs(); File(dir, "_appid").writeText(room.getString("appid", DEFAULT_APPID) ?: DEFAULT_APPID) }
+        } catch (_: Throwable) {}
+        main.post(object : Runnable { override fun run() { tick(); main.postDelayed(this, 250) } })
+    }
+
+    /** Ник для комнат Photon: тот же, что в чате. */
+    private var nick: String
+        get() = prefs.getString("nick", "") ?: ""
+        set(v) { prefs.edit().putString("nick", v.trim().take(24)).apply() }
 
     fun stopAll() { relayGen++ }
 
@@ -124,9 +135,39 @@ class MiniGames(private val act: Activity) {
             val f = File(dir, "_maxplayers")
             try { if (digits.isEmpty()) f.delete() else f.writeText(digits) } catch (_: Throwable) {}
         }), ui.matchWrap().apply { topMargin = dp(4) })
+        // ник: им подписываемся в комнатах Photon (тот же ник, что в чате)
+        into.addView(ui.label("Твой ник", 14f), ui.matchWrap().apply { topMargin = dp(12) })
+        into.addView(ui.textInput(nick, 300, "как тебя звать в игре") { v ->
+            nick = v
+            if (v.isNotBlank()) cmd("nick\t" + v.trim().replace('\t', ' ').take(24))
+        }, ui.matchWrap().apply { topMargin = dp(4) })
+        // две кнопки, как в игре: создать новую комнату и присоединиться по коду
+        into.addView(ui.pill("Создать новую комнату", primary = true, sizeSp = 15f) {
+            if (nick.isBlank()) { message = "Сначала впиши ник."; renderMulti(into); return@pill }
+            val c = (100000..999999).random().toString()
+            room.edit().putString("code", c).apply()
+            val max = room.getString("max", "")?.toIntOrNull() ?: 0
+            cmd("nick\t" + nick.trim().replace('\t', ' ').take(24))
+            cmd("create\t$c\t$max")
+            message = "Комната создаётся. Код для друзей: $c"
+            renderMulti(into)
+        }, ui.matchWrap().apply { topMargin = dp(10) })
+        into.addView(ui.label("Создаёт комнату, код покажем здесь. Друзья входят по этому коду.", 12f, GameUi.MUTED, bold = false))
+        into.addView(ui.textInput(room.getString("code", "") ?: "", 300, "код комнаты (6 цифр)") { v -> room.edit().putString("code", v.filter(Char::isDigit).take(12)).apply() }, ui.matchWrap().apply { topMargin = dp(10) })
+        into.addView(ui.pill("Присоединиться к комнате") {
+            val c = (room.getString("code", "") ?: "").trim()
+            if (nick.isBlank()) { message = "Сначала впиши ник."; renderMulti(into); return@pill }
+            if (c.isEmpty()) { message = "Впиши код комнаты."; renderMulti(into); return@pill }
+            cmd("nick\t" + nick.trim().replace('\t', ' ').take(24))
+            cmd("join\t$c")
+            message = "Вхожу в комнату $c…"
+            renderMulti(into)
+        }, ui.matchWrap().apply { topMargin = dp(6) })
+        if (message.isNotEmpty()) into.addView(ui.label(message, 13f, GameUi.RUST, bold = false))
+
         // свой AppId Photon Cloud: мод подставит его при подключении (после перезапуска игры)
         into.addView(ui.label("AppId Photon Cloud (свой)", 14f), ui.matchWrap().apply { topMargin = dp(12) })
-        into.addView(ui.textInput(room.getString("appid", "") ?: "", 300, "вставь App ID из dashboard.photonengine.com") { v ->
+        into.addView(ui.textInput(room.getString("appid", DEFAULT_APPID) ?: DEFAULT_APPID, 300, "вставь App ID из dashboard.photonengine.com") { v ->
             val t = v.trim()
             room.edit().putString("appid", t).apply()
             val f = File(dir, "_appid")
@@ -359,5 +400,8 @@ class MiniGames(private val act: Activity) {
         main.postDelayed({ if (phase == "idle") { hud.visibility = View.GONE; message = "" } }, 9000)
     }
 
-    companion object { const val OY = 1000f }
+    companion object {
+        const val OY = 1000f
+        const val DEFAULT_APPID = "ae18accd-8a43-479c-8000-c2eab1aeb36e"
+    }
 }

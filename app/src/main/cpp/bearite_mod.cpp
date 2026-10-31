@@ -2040,6 +2040,51 @@ void publish_positions(long long now) {
 }
 
 /** Команды лаунчера (maps/_cmd): «enter\tid» — войти в мир-арену в текущей сцене, «exit», «tp\tx\ty\tz» — в координатах активного мира. */
+
+char* photon_field_ptr(void* obj, const char* name, std::string* typeOut = nullptr);
+/** Команды из лаунчера: «nick\tник», «create\tкод\tлимит», «join\tкод». Выполняются в потоке Unity (как и остальной мод). */
+void photon_nick(const std::string& nick) {
+    void* pnK = bearite_find_class("Photon.Pun", "PhotonNetwork");
+    void* m = pnK ? bearite_il2.class_get_method_from_name(pnK, "set_NickName", 1) : nullptr;
+    if (!m) { logf_("команда: ник не поставился, метода set_NickName нет"); return; }
+    void* a[1] = {bearite_il2.string_new(nick.c_str())};
+    inv(m, nullptr, a);
+    logf_("команда: ник в Photon «%s»", nick.c_str());
+}
+
+void photon_create_or_join(const std::string& code, int maxPlayers) {
+    void* pnK = bearite_find_class("Photon.Pun", "PhotonNetwork");
+    void* roK = bearite_find_class("Photon.Realtime", "RoomOptions");
+    if (!pnK || !roK) { logf_("команда: нет PhotonNetwork или RoomOptions"); return; }
+    void* opts = obj_new(roK);
+    if (!opts) { logf_("команда: RoomOptions не создался"); return; }
+    std::string tn;
+    if (char* p = photon_field_ptr(opts, "IsVisible", &tn)) *(uint8_t*)p = 1;
+    if (char* p = photon_field_ptr(opts, "IsOpen", &tn))    *(uint8_t*)p = 1;
+    if (maxPlayers > 0) {
+        if (char* p = photon_field_ptr(opts, "MaxPlayers", &tn)) {
+            if (tn == "System.Byte" || tn == "System.SByte") *(uint8_t*)p = (uint8_t)maxPlayers;
+            else if (tn == "System.Int32") *(int32_t*)p = maxPlayers;
+        }
+    }
+    void* m = bearite_il2.class_get_method_from_name(pnK, "JoinOrCreateRoom", 4);
+    if (!m) { logf_("команда: нет PhotonNetwork.JoinOrCreateRoom"); return; }
+    void* a[4] = {bearite_il2.string_new(code.c_str()), opts, nullptr, nullptr};
+    bool ok = false;
+    inv(m, nullptr, a, &ok);
+    logf_("команда: создать/войти в комнату «%s», лимит %d — %s", code.c_str(), maxPlayers, ok ? "отправлено" : "не отправлено");
+}
+
+void photon_join(const std::string& code) {
+    void* pnK = bearite_find_class("Photon.Pun", "PhotonNetwork");
+    void* m = pnK ? bearite_il2.class_get_method_from_name(pnK, "JoinRoom", 1) : nullptr;
+    if (!m) { logf_("команда: нет PhotonNetwork.JoinRoom"); return; }
+    void* a[1] = {bearite_il2.string_new(code.c_str())};
+    bool ok = false;
+    inv(m, nullptr, a, &ok);
+    logf_("команда: войти в комнату «%s» — %s", code.c_str(), ok ? "отправлено" : "не отправлено");
+}
+
 void cmd_poll() {
     std::string path = g_mapsDir + "/_cmd";
     FILE* f = fopen(path.c_str(), "r");
@@ -2057,6 +2102,9 @@ void cmd_poll() {
         auto parts = split_tab(text.substr(st, e - st));
         st = e + 1;
         if (parts.empty()) continue;
+        if (parts[0] == "nick" && parts.size() >= 2) { photon_nick(parts[1]); continue; }
+        if (parts[0] == "create" && parts.size() >= 2) { photon_create_or_join(parts[1], parts.size() >= 3 ? atoi(parts[2].c_str()) : 0); continue; }
+        if (parts[0] == "join" && parts.size() >= 2) { photon_join(parts[1]); continue; }
         if (parts[0] == "enter" && parts.size() >= 2) {
             if (const MapSpec* t = find_spec(parts[1])) {
                 g_inPlace = true;
@@ -2082,7 +2130,7 @@ void cmd_poll() {
 
 // ---------------------------------------------------------------- Photon Cloud: свой AppId (maps/_appid)
 /** Поле объекта по имени (через il2cpp_class_get_field_from_name): указатель на данные поля или nullptr. */
-char* photon_field_ptr(void* obj, const char* name, std::string* typeOut = nullptr) {
+char* photon_field_ptr(void* obj, const char* name, std::string* typeOut) {
     static void *fieldFn = nullptr, *offFn = nullptr, *ftypeFn = nullptr, *tnameFn = nullptr;
     if (!fieldFn) {
         fieldFn = A->il2cpp_symbol("il2cpp_class_get_field_from_name");
@@ -2149,12 +2197,13 @@ uint8_t h_connect_settings(const void* mi) {
     return o_connect_settings ? o_connect_settings(mi) : 0;
 }
 
+int read_room_limit();
 bool set_room_max(void* opts) {
     std::string v;
     if (FILE* f = fopen((g_mapsDir + "/_maxplayers").c_str(), "r")) { char b[32] = {0}; fread(b, 1, sizeof b - 1, f); fclose(f); v = b; }
     if (v.empty() || !opts) return false;
     int mx = atoi(v.c_str());
-    if (mx < 0) return false;
+    if (mx <= 0) return false;   // 0 или пусто — лимит игры
     if (mx > 255) mx = 255;
     void* k = obj_class(opts);
     static void *fieldFn = nullptr, *offFn = nullptr, *ftypeFn = nullptr, *tnameFn = nullptr;
@@ -2189,7 +2238,7 @@ int read_room_limit() {
     int mx = atoi(v.c_str());
     // сервер Photon игры не принимает комнаты больше 4 игроков («Max Players Peer Room value is too big, limit:4»):
     // выше лимита, 0 и мусор не трогаем, переопределяем только 1..3
-    return (mx >= 1 && mx <= 3) ? mx : -1;
+    return mx <= 0 ? -1 : (mx > 255 ? 255 : mx);
 }
 void (*o_ro_max_b)(void*, uint32_t, const void*) = nullptr;
 void h_ro_max_b(void* self, uint32_t v, const void* mi) {
