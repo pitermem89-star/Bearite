@@ -17,7 +17,7 @@ import java.util.Locale
  */
 class SaveImport(private val act: AppCompatActivity) {
 
-    private fun roots(): List<File> = listOfNotNull(act.getExternalFilesDir(null), act.filesDir).distinctBy { it.absolutePath }
+    private fun roots(): List<File> = listOfNotNull(act.getExternalFilesDir(null), act.filesDir).distinctBy { it.absolutePath }   // сначала видимая в проводнике Android/data/…/files
 
     private fun walk(dir: File, depth: Int, out: MutableList<File>, all: Boolean) {
         if (depth > 5 || out.size > 400) return
@@ -62,21 +62,38 @@ class SaveImport(private val act: AppCompatActivity) {
         } else choose(name, data)
     }
 
-    /** Сохранение кладётся в папку данных игры: com.bearite.patcher/files (там игра ищет свои .sba). */
+    /** Папка данных игры, как её видно в проводнике: Android/data/com.bearite.patcher/files (Unity держит там persistentDataPath). */
+    private fun dataDir(): File = act.getExternalFilesDir(null) ?: act.filesDir
+
+    /**
+     * Все три слота игры лежат в одном файле .sba, и игра читает его только под своим именем. Поэтому не переименованный файл рядом,
+     * а содержимое выбранного файла записывается в настоящий файл сохранения (имя берётся у него); прежнее содержимое остаётся в «имя.bak».
+     */
     private fun choose(name: String, data: ByteArray) {
-        val safe = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").ifBlank { "save.sba" }
-        write(File(act.filesDir, safe), data)
+        val have = existing().sortedByDescending { it.lastModified() }
+        val target = have.firstOrNull() ?: File(dataDir(), name.replace(Regex("[\\\\/:*?\"<>|]"), "_").ifBlank { "save.sba" })
+        write(target, data, have.isNotEmpty())
     }
 
-    private fun write(target: File, data: ByteArray) {
+    private fun write(target: File, data: ByteArray, replacing: Boolean) {
         try {
             target.parentFile?.mkdirs()
-            if (target.exists()) target.copyTo(File(target.parentFile, target.name + ".bak-" + System.currentTimeMillis() / 1000), overwrite = true)
+            var backup = ""
+            if (target.exists() && target.length() > 0) {
+                val bak = File(target.parentFile, target.name + ".bak")
+                target.copyTo(bak, overwrite = true)
+                if (!bak.exists() || bak.length() != target.length()) throw java.io.IOException("не удалось сделать резервную копию ${bak.name}")
+                backup = bak.name
+            }
             target.writeBytes(data)
-            BLog.i("сохранение: записано ${target.absolutePath}, ${data.size} байт")
-            AlertDialog.Builder(act).setTitle("Сохранение загружено")
-                .setMessage("Файл записан: ${target.name}. Прежний файл, если был, сохранён рядом с пометкой .bak. Запусти игру и открой слот сохранения.")
-                .setPositiveButton("Ок", null).show()
+            if (target.length() != data.size.toLong()) throw java.io.IOException("размер записанного файла не совпал")
+            BLog.i("сохранение: записано ${target.absolutePath}, ${data.size} байт, копия: ${backup.ifEmpty { "нет" }}")
+            val msg = buildString {
+                append(if (replacing) "Сохранение игры заменено:" else "Файл записан (в игре ещё не было сохранения, имя взято из выбранного файла):").append("\n").append(target.absolutePath)
+                append("\n\n").append(if (backup.isNotEmpty()) "Прежнее сохранение скопировано рядом: $backup" else "Прежнего файла не было, резервная копия не нужна.")
+                if (!replacing) append("\n\nЕсли игра не увидит файл, запусти её, создай любое сохранение, выйди и загрузи файл ещё раз: он встанет под настоящее имя.")
+            }
+            AlertDialog.Builder(act).setTitle("Сохранение загружено").setMessage(msg).setPositiveButton("Ок", null).show()
         } catch (t: Throwable) {
             BLog.e("сохранение: не записалось", t)
             toast("Не получилось записать: ${t.message}")
