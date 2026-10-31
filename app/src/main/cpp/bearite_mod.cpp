@@ -2079,6 +2079,76 @@ void cmd_poll() {
     }
 }
 
+
+// ---------------------------------------------------------------- Photon Cloud: свой AppId (maps/_appid)
+/** Поле объекта по имени (через il2cpp_class_get_field_from_name): указатель на данные поля или nullptr. */
+char* photon_field_ptr(void* obj, const char* name, std::string* typeOut = nullptr) {
+    static void *fieldFn = nullptr, *offFn = nullptr, *ftypeFn = nullptr, *tnameFn = nullptr;
+    if (!fieldFn) {
+        fieldFn = A->il2cpp_symbol("il2cpp_class_get_field_from_name");
+        offFn = A->il2cpp_symbol("il2cpp_field_get_offset");
+        ftypeFn = A->il2cpp_symbol("il2cpp_field_get_type");
+        tnameFn = A->il2cpp_symbol("il2cpp_type_get_name");
+    }
+    if (!obj || !fieldFn || !offFn) return nullptr;
+    void* k = obj_class(obj);
+    if (!k) return nullptr;
+    void* fl = reinterpret_cast<void* (*)(void*, const char*)>(fieldFn)(k, name);
+    if (!fl) return nullptr;
+    int off = reinterpret_cast<int (*)(void*)>(offFn)(fl);
+    if (typeOut && ftypeFn && tnameFn) if (void* ft = reinterpret_cast<void* (*)(void*)>(ftypeFn)(fl)) { const char* c = reinterpret_cast<const char* (*)(void*)>(tnameFn)(ft); if (c) *typeOut = c; }
+    return (char*)obj + off;
+}
+
+/** Значение статического поля класса (il2cpp_field_static_get_value) или nullptr. */
+void* photon_static_field(void* klass, const char* name) {
+    static void *fieldFn = nullptr, *sget = nullptr;
+    if (!fieldFn) { fieldFn = A->il2cpp_symbol("il2cpp_class_get_field_from_name"); sget = A->il2cpp_symbol("il2cpp_field_static_get_value"); }
+    if (!klass || !fieldFn || !sget) return nullptr;
+    void* fl = reinterpret_cast<void* (*)(void*, const char*)>(fieldFn)(klass, name);
+    if (!fl) return nullptr;
+    void* out = nullptr;
+    reinterpret_cast<int (*)(void*, void*)>(sget)(fl, &out);
+    return out;
+}
+
+/** Подменяет AppIdRealtime в настройках Photon на id из maps/_appid. Возвращает true, если поле записано. */
+bool apply_photon_appid() {
+    std::string id;
+    if (FILE* f = fopen((g_mapsDir + "/_appid").c_str(), "r")) { char b[96] = {0}; fread(b, 1, sizeof b - 1, f); fclose(f); id = b; }
+    size_t a = id.find_first_not_of(" \t\r\n"), z = id.find_last_not_of(" \t\r\n");
+    if (a == std::string::npos) return false;
+    id = id.substr(a, z - a + 1);
+    if (id.size() < 8 || id.size() > 80) { logf_("Photon: в _appid странная строка, не трогаю"); return false; }
+
+    void* pnK = bearite_find_class("Photon.Pun", "PhotonNetwork");
+    if (!pnK) { logf_("Photon: класса PhotonNetwork нет"); return false; }
+    void* settings = nullptr;
+    if (void* getS = bearite_il2.class_get_method_from_name(pnK, "get_PhotonServerSettings", 0)) settings = inv(getS, nullptr);
+    if (!settings) settings = photon_static_field(pnK, "PhotonServerSettings");
+    if (!settings) { logf_("Photon: настройки PhotonServerSettings ещё не загружены, пропускаю подмену"); return false; }
+
+    char* appSettingsPtr = nullptr;
+    std::string tn;
+    appSettingsPtr = photon_field_ptr(settings, "AppSettings", &tn);
+    if (!appSettingsPtr) { logf_("Photon: в PhotonServerSettings нет поля AppSettings"); return false; }
+    void* appSettings = *(void**)appSettingsPtr;
+    if (!appSettings) { logf_("Photon: AppSettings пустые"); return false; }
+
+    char* idPtr = photon_field_ptr(appSettings, "AppIdRealtime", &tn);
+    if (!idPtr) { logf_("Photon: в AppSettings нет поля AppIdRealtime"); return false; }
+    void* old = *(void**)idPtr;
+    logf_("Photon: был AppIdRealtime «%s», ставлю «%s»", old ? utf8(old).c_str() : "(пусто)", id.c_str());
+    *(void**)idPtr = bearite_il2.string_new(id.c_str());
+    return true;
+}
+
+uint8_t (*o_connect_settings)(const void*) = nullptr;
+uint8_t h_connect_settings(const void* mi) {
+    try { apply_photon_appid(); } catch (...) { logf_("Photon: подмена AppId упала, играю со стандартным"); }
+    return o_connect_settings ? o_connect_settings(mi) : 0;
+}
+
 bool set_room_max(void* opts) {
     std::string v;
     if (FILE* f = fopen((g_mapsDir + "/_maxplayers").c_str(), "r")) { char b[32] = {0}; fread(b, 1, sizeof b - 1, f); fclose(f); v = b; }
@@ -2516,6 +2586,12 @@ extern "C" __attribute__((visibility("default"))) void bearite_mod_init(const Be
         int r2 = bearite_hook_method(A, ID, "Photon.Pun", "PhotonNetwork", "JoinOrCreateRoom", 4, (void*)h_join_create_room, (void**)&o_join_create_room);
         if (r1 != 0 && r2 != 0) logf_("перехват создания комнаты: не вышло (%d, %d)", r1, r2);
     }
+    {
+        int rc = bearite_hook_method(A, ID, "Photon.Pun", "PhotonNetwork", "ConnectUsingSettings", 0, (void*)h_connect_settings, (void**)&o_connect_settings);
+        logf_("Photon: перехват ConnectUsingSettings: %s", rc == 0 ? "готово" : "не вышло");
+    }
+    dump_class("Photon.Pun", "PhotonServerSettings");
+    dump_class("Photon.Realtime", "AppSettings");
     dump_class("Photon.Realtime", "RoomOptions");
     dump_class("Photon.Realtime", "Room");
     hook_max_setter("RoomOptions");

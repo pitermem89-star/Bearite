@@ -124,6 +124,15 @@ class MiniGames(private val act: Activity) {
             val f = File(dir, "_maxplayers")
             try { if (digits.isEmpty()) f.delete() else f.writeText(digits) } catch (_: Throwable) {}
         }), ui.matchWrap().apply { topMargin = dp(4) })
+        // свой AppId Photon Cloud: мод подставит его при подключении (после перезапуска игры)
+        into.addView(ui.label("AppId Photon Cloud (свой)", 14f), ui.matchWrap().apply { topMargin = dp(12) })
+        into.addView(ui.textInput(room.getString("appid", "") ?: "", 300, "вставь App ID из dashboard.photonengine.com") { v ->
+            val t = v.trim()
+            room.edit().putString("appid", t).apply()
+            val f = File(dir, "_appid")
+            try { if (t.isEmpty()) f.delete() else f.writeText(t) } catch (_: Throwable) {}
+        }, ui.matchWrap().apply { topMargin = dp(4) })
+        into.addView(ui.label("Применяется после перезапуска игры. Пусто — игра подключается к своему серверу, как раньше.", 12f, GameUi.MUTED, bold = false))
         into.addView(ui.label("Сервер Photon игры не разрешает больше 4 игроков в комнате, это ограничение не обойти. Здесь можно только уменьшить лимит (1–3); пусто или 4 и больше — как в игре.", 12f, GameUi.MUTED, bold = false))
     }
 
