@@ -2117,7 +2117,9 @@ int read_room_limit() {
     if (FILE* f = fopen((g_mapsDir + "/_maxplayers").c_str(), "r")) { char b[32] = {0}; fread(b, 1, sizeof b - 1, f); fclose(f); v = b; }
     if (v.empty()) return -1;
     int mx = atoi(v.c_str());
-    return mx < 0 ? -1 : (mx > 255 ? 255 : mx);
+    // сервер Photon игры не принимает комнаты больше 4 игроков («Max Players Peer Room value is too big, limit:4»):
+    // выше лимита, 0 и мусор не трогаем, переопределяем только 1..3
+    return (mx >= 1 && mx <= 3) ? mx : -1;
 }
 void (*o_ro_max_b)(void*, uint32_t, const void*) = nullptr;
 void h_ro_max_b(void* self, uint32_t v, const void* mi) {

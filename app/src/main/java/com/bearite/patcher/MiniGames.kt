@@ -118,13 +118,13 @@ class MiniGames(private val act: Activity) {
         for (p in players.sortedBy { it.actor }) into.addView(ui.label("• " + p.nick.ifBlank { "игрок ${p.actor}" } + (if (p.local) "  (ты)" else ""), 14f, if (p.local) GameUi.GREEN else GameUi.CREAM, bold = p.local))
         // лимит игроков для создаваемых комнат
         into.addView(ui.label("Лимит игроков в новой комнате", 14f), ui.matchWrap().apply { topMargin = dp(12) })
-        into.addView(ui.row("Игроков", ui.textInput(room.getString("max", "") ?: "", 120, "пусто = как в игре") { v ->
+        into.addView(ui.row("Игроков", ui.textInput(room.getString("max", "") ?: "", 120, "пусто = 4 как в игре") { v ->
             val digits = v.filter(Char::isDigit).take(3)
             room.edit().putString("max", digits).apply()
             val f = File(dir, "_maxplayers")
             try { if (digits.isEmpty()) f.delete() else f.writeText(digits) } catch (_: Throwable) {}
         }), ui.matchWrap().apply { topMargin = dp(4) })
-        into.addView(ui.label("Применяется, когда ты создаёшь комнату. 0 — без ограничения (максимум 255).", 12f, GameUi.MUTED, bold = false))
+        into.addView(ui.label("Сервер Photon игры не разрешает больше 4 игроков в комнате, это ограничение не обойти. Здесь можно только уменьшить лимит (1–3); пусто или 4 и больше — как в игре.", 12f, GameUi.MUTED, bold = false))
     }
 
     // ------------------------------------------------------------------ файлы мода
